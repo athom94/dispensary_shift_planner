@@ -69,6 +69,15 @@ st.html("""
     color: #f0f0f0 !important;
 }
 
+/* Hide internal widget keys in expanders */
+.stExpander summary::before {
+    content: none !important;
+}
+
+.stExpander [data-testid] {
+    color: transparent !important;
+}
+
 /* Buttons */
 .stButton>button {
     border-radius: 8px !important;
@@ -288,10 +297,9 @@ def show_dashboard():
     # Display week range
     st.markdown(f"### Week of {week_dates[0].strftime('%B %d')} - {week_dates[4].strftime('%B %d, %Y')}")
     
-    # Auto-populate schedules for this week if they don't exist
+    # Get week date range
     week_start = week_dates[0].strftime("%Y-%m-%d")
     week_end = week_dates[4].strftime("%Y-%m-%d")
-    db.ensure_schedules_exist_for_date_range(week_start, week_end)
     
     # Team filter
     teams = db.get_all_teams()
@@ -383,7 +391,8 @@ def show_dashboard():
                        and datetime.strptime(a['end_date'], "%Y-%m-%d").date() >= day_date]
         
         # Create expander for each day
-        with st.expander(f"**{day_name}** - {len(day_schedules)} shifts scheduled", expanded=True):
+        st.markdown("")  # Add spacing
+        with st.expander(f"{day_name} - {len(day_schedules)} shift(s)", expanded=True):
             if day_schedules or day_absences:
                 fig = gantt_view.create_daily_gantt(day_schedules, day_absences, date_str)
                 st.plotly_chart(fig, use_container_width=True)
@@ -667,6 +676,9 @@ def show_schedule_page():
     with tab2:
         st.subheader("View and Edit Schedules")
         
+        # View mode selector
+        view_mode = st.radio("View by:", ["By Person", "By Date"], horizontal=True, key="view_mode")
+        
         # Date range selector
         col1, col2 = st.columns(2)
         with col1:
@@ -674,11 +686,8 @@ def show_schedule_page():
         with col2:
             end_date = st.date_input("End Date", value=date.today() + timedelta(days=6), key="view_end")
         
-        # Auto-populate schedules for the selected date range
-        db.ensure_schedules_exist_for_date_range(
-            start_date.strftime("%Y-%m-%d"),
-            end_date.strftime("%Y-%m-%d")
-        )
+        # Don't auto-populate in edit view - only show what's actually scheduled
+        # (Auto-population happens in the "Add Weekly Schedule" tab)
         
         schedules = db.get_schedules_for_date_range(
             start_date.strftime("%Y-%m-%d"),
@@ -720,14 +729,9 @@ def show_schedule_page():
                         key=f"weekly_resp_{member['id']}",
                         label_visibility="collapsed"
                     )
-                    # We store the selected ID in the form state indirectly by key if needed, 
-                    # but here we can just process on submit.
-                    # Wait, st.form doesn't well handle dynamic selectboxes if they aren't unique.
-                    # Actually it works fine if we collect them on submit.
                 
             if st.form_submit_button("💾 Save Weekly Responsibilities", type="primary", use_container_width=True):
                 for member in active_members:
-                    # Get the value from session state
                     val = st.session_state[f"weekly_resp_{member['id']}"]
                     db.set_weekly_responsibility(monday_str, member['id'], resp_options[val])
                 st.success("Weekly responsibilities updated!")
@@ -738,61 +742,155 @@ def show_schedule_page():
         st.subheader("📅 Daily Shifts (Times)")
         
         if schedules:
-            # Group by date
-            schedules_by_date = {}
-            for schedule in schedules:
-                date_key = schedule['date']
-                if date_key not in schedules_by_date:
-                    schedules_by_date[date_key] = []
-                schedules_by_date[date_key].append(schedule)
-            
-            # Display grouped by date
-            for date_key in sorted(schedules_by_date.keys()):
-                day_date = datetime.strptime(date_key, "%Y-%m-%d").date()
-                day_name = day_date.strftime("%A, %B %d, %Y")
+            if view_mode == "By Date":
+                # Group by date
+                schedules_by_date = {}
+                for schedule in schedules:
+                    date_key = schedule['date']
+                    if date_key not in schedules_by_date:
+                        schedules_by_date[date_key] = []
+                    schedules_by_date[date_key].append(schedule)
                 
-                with st.expander(f"**{day_name}** - {len(schedules_by_date[date_key])} shifts", expanded=False):
-                    for schedule in schedules_by_date[date_key]:
-                        col1, col2, col3, col4, col5 = st.columns([2, 1.5, 2, 1.5, 0.8])
-                        
-                        with col1:
-                            st.text(schedule['member_name'])
-                        
-                        with col2:
-                            # Allow changing shift with dropdown
-                            shifts = db.get_all_shifts()
-                            shift_options = get_options_dict(shifts, format_func=lambda s: f"{s['name']} ({s['start_time']}-{s['end_time']})")
+                # Display grouped by date
+                for date_key in sorted(schedules_by_date.keys()):
+                    day_date = datetime.strptime(date_key, "%Y-%m-%d").date()
+                    day_name = day_date.strftime("%A, %B %d, %Y")
+                    
+                    with st.expander(f"**{day_name}** - {len(schedules_by_date[date_key])} shifts", expanded=False):
+                        for schedule in schedules_by_date[date_key]:
+                            col1, col2, col3, col4, col5 = st.columns([2, 1.5, 2, 1.5, 0.8])
                             
-                            current_shift_name = f"{schedule['shift_name']} ({schedule['start_time']}-{schedule['end_time']})"
-                            current_index = list(shift_options.keys()).index(current_shift_name) if current_shift_name in shift_options else 0
+                            with col1:
+                                st.text(schedule['member_name'])
                             
-                            def update_shift():
-                                new_shift_name = st.session_state[f"shift_{schedule['id']}"]
+                            with col2:
+                                # Get all shifts
+                                shifts = db.get_all_shifts()
+                                shift_options = get_options_dict(shifts, format_func=lambda s: f"{s['name']} ({s['start_time']}-{s['end_time']})")
+                                
+                                current_shift_name = f"{schedule['shift_name']} ({schedule['start_time']}-{schedule['end_time']})"
+                                current_index = list(shift_options.keys()).index(current_shift_name) if current_shift_name in shift_options else 0
+                                
+                                new_shift_name = st.selectbox(
+                                    "Shift",
+                                    options=list(shift_options.keys()),
+                                    index=current_index,
+                                    key=f"shift_{schedule['id']}",
+                                    label_visibility="collapsed"
+                                )
+                                
+                                # Check if changed and update
                                 new_shift_id = shift_options[new_shift_name]
                                 if new_shift_id != schedule['shift_id']:
-                                    db.update_schedule_shift(schedule['id'], new_shift_id)
+                                    if st.button("✓", key=f"update_{schedule['id']}", help="Apply change"):
+                                        db.update_schedule_shift(schedule['id'], new_shift_id)
+                                        st.rerun()
                             
-                            st.selectbox(
-                                "Shift",
+                            with col3:
+                                # Show responsibility (read-only from weekly)
+                                resp_name = schedule.get('responsibility_name', 'Unassigned')
+                                resp_color = schedule.get('responsibility_color', '#cccccc')
+                                st.markdown(f'<span style="background-color: {resp_color}; color: white; padding: 2px 6px; border-radius: 4px;">{resp_name}</span>', unsafe_allow_html=True)
+                            
+                            with col4:
+                                st.text(f"{schedule['start_time']}-{schedule['end_time']}")
+                            
+                            with col5:
+                                if st.button("🗑️", key=f"del_{schedule['id']}", help="Delete shift"):
+                                    db.delete_schedule(schedule['id'])
+                                    st.rerun()
+            
+            else:  # By Person view
+                # Group by person
+                schedules_by_person = {}
+                for schedule in schedules:
+                    member_key = schedule['member_id']
+                    if member_key not in schedules_by_person:
+                        schedules_by_person[member_key] = {
+                            'name': schedule['member_name'],
+                            'shifts': []
+                        }
+                    schedules_by_person[member_key]['shifts'].append(schedule)
+                
+                # Display grouped by person
+                for member_id, member_data in sorted(schedules_by_person.items(), key=lambda x: x[1]['name']):
+                    shifts = sorted(member_data['shifts'], key=lambda x: x['date'])
+                    
+                    with st.expander(f"**{member_data['name']}** - {len(shifts)} shifts", expanded=False):
+                        st.markdown("#### Schedule Overview")
+                        
+                        for schedule in shifts:
+                            col1, col2, col3, col4, col5 = st.columns([2, 1.5, 2, 1.5, 0.8])
+                            
+                            with col1:
+                                day_date = datetime.strptime(schedule['date'], "%Y-%m-%d").date()
+                                st.text(day_date.strftime("%a, %b %d"))
+                            
+                            with col2:
+                                # Get all shifts
+                                shifts_list = db.get_all_shifts()
+                                shift_options = get_options_dict(shifts_list, format_func=lambda s: f"{s['name']} ({s['start_time']}-{s['end_time']})")
+                                
+                                current_shift_name = f"{schedule['shift_name']} ({schedule['start_time']}-{schedule['end_time']})"
+                                current_index = list(shift_options.keys()).index(current_shift_name) if current_shift_name in shift_options else 0
+                                
+                                new_shift_name = st.selectbox(
+                                    "Shift",
+                                    options=list(shift_options.keys()),
+                                    index=current_index,
+                                    key=f"shift_{schedule['id']}",
+                                    label_visibility="collapsed"
+                                )
+                                
+                                # Check if changed and show apply button
+                                new_shift_id = shift_options[new_shift_name]
+                                if new_shift_id != schedule['shift_id']:
+                                    if st.button("✓", key=f"update_{schedule['id']}", help="Apply change"):
+                                        db.update_schedule_shift(schedule['id'], new_shift_id)
+                                        st.rerun()
+                            
+                            with col3:
+                                # Show responsibility (read-only from weekly)
+                                resp_name = schedule.get('responsibility_name', 'Unassigned')
+                                resp_color = schedule.get('responsibility_color', '#cccccc')
+                                st.markdown(f'<span style="background-color: {resp_color}; color: white; padding: 2px 6px; border-radius: 4px;">{resp_name}</span>', unsafe_allow_html=True)
+                            
+                            with col4:
+                                st.text(f"{schedule['start_time']}-{schedule['end_time']}")
+                            
+                            with col5:
+                                if st.button("🗑️", key=f"del_{schedule['id']}", help="Delete shift"):
+                                    db.delete_schedule(schedule['id'])
+                                    st.rerun()
+                        
+                        # Bulk actions for this person
+                        st.markdown("---")
+                        st.markdown("**Bulk Actions:**")
+                        
+                        bcol1, bcol2 = st.columns(2)
+                        with bcol1:
+                            # Apply same shift to all days
+                            shifts_list = db.get_all_shifts()
+                            shift_options = get_options_dict(shifts_list, format_func=lambda s: f"{s['name']} ({s['start_time']}-{s['end_time']})")
+                            
+                            bulk_shift = st.selectbox(
+                                "Apply shift to all days:",
                                 options=list(shift_options.keys()),
-                                index=current_index,
-                                key=f"shift_{schedule['id']}",
-                                label_visibility="collapsed",
-                                on_change=update_shift
+                                key=f"bulk_shift_{member_id}"
                             )
+                            
+                            if st.button("Apply to All", key=f"bulk_apply_{member_id}", type="secondary"):
+                                bulk_shift_id = shift_options[bulk_shift]
+                                for schedule in shifts:
+                                    db.update_schedule_shift(schedule['id'], bulk_shift_id)
+                                st.success(f"Applied {bulk_shift} to all days!")
+                                st.rerun()
                         
-                        with col3:
-                            # Show responsibility (read-only from weekly)
-                            resp_name = schedule.get('responsibility_name', 'Unassigned')
-                            resp_color = schedule.get('responsibility_color', '#cccccc')
-                            st.markdown(f'<span style="background-color: {resp_color}; color: white; padding: 2px 6px; border-radius: 4px;">{resp_name}</span>', unsafe_allow_html=True)
-                        
-                        with col4:
-                            st.text(f"{schedule['start_time']}-{schedule['end_time']}")
-                        
-                        with col5:
-                            if st.button("🗑️", key=f"del_{schedule['id']}"):
-                                db.delete_schedule(schedule['id'])
+                        with bcol2:
+                            if st.button("Delete All Shifts", key=f"bulk_delete_{member_id}", type="secondary"):
+                                for schedule in shifts:
+                                    db.delete_schedule(schedule['id'])
+                                st.success(f"Deleted all shifts for {member_data['name']}")
                                 st.rerun()
         else:
             st.info("No schedules found for the selected date range.")

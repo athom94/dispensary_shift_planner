@@ -301,6 +301,9 @@ def show_dashboard():
     week_start = week_dates[0].strftime("%Y-%m-%d")
     week_end = week_dates[4].strftime("%Y-%m-%d")
     
+    # Smart auto-populate: only fill completely empty weeks (preserves manual edits)
+    db.ensure_schedules_exist_for_date_range(week_start, week_end)
+    
     # Team filter
     teams = db.get_all_teams()
     team_options = get_options_dict(teams, include_none=True, none_label="All Teams")
@@ -686,8 +689,11 @@ def show_schedule_page():
         with col2:
             end_date = st.date_input("End Date", value=date.today() + timedelta(days=6), key="view_end")
         
-        # Don't auto-populate in edit view - only show what's actually scheduled
-        # (Auto-population happens in the "Add Weekly Schedule" tab)
+        # Smart auto-populate: only fill completely empty weeks (preserves manual edits)
+        db.ensure_schedules_exist_for_date_range(
+            start_date.strftime("%Y-%m-%d"),
+            end_date.strftime("%Y-%m-%d")
+        )
         
         schedules = db.get_schedules_for_date_range(
             start_date.strftime("%Y-%m-%d"),

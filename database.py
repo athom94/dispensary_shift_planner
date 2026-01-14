@@ -579,7 +579,8 @@ def auto_populate_schedules_for_date_range(start_date: str, end_date: str) -> in
 
 def ensure_schedules_exist_for_date_range(start_date: str, end_date: str) -> bool:
     """
-    Ensure schedules exist for the date range, auto-generating if needed.
+    Ensure schedules exist for the date range, auto-generating ONLY if the week is completely empty.
+    This allows future weeks to auto-populate while preserving manual edits.
     
     Args:
         start_date: Start date in YYYY-MM-DD format
@@ -588,8 +589,25 @@ def ensure_schedules_exist_for_date_range(start_date: str, end_date: str) -> boo
     Returns:
         True if any schedules were created, False otherwise
     """
-    created_count = auto_populate_schedules_for_date_range(start_date, end_date)
-    return created_count > 0
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    # Check if ANY schedules exist in this date range
+    cursor.execute("""
+        SELECT COUNT(*) as count FROM schedules 
+        WHERE date BETWEEN ? AND ?
+    """, (start_date, end_date))
+    
+    existing_count = cursor.fetchone()['count']
+    conn.close()
+    
+    # Only auto-populate if the range is completely empty
+    # This means once you manually edit a week (add/delete/change), it won't be touched again
+    if existing_count == 0:
+        created_count = auto_populate_schedules_for_date_range(start_date, end_date)
+        return created_count > 0
+    
+    return False
 
 
 # ==================== WEEKLY RESPONSIBILITIES ====================

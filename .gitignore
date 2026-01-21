@@ -12,7 +12,7 @@ ENV/
 .venv
 
 # Database files
-*.db
+# *.db  # Commented out to allow shift_planner.db to be tracked
 *.sqlite
 *.sqlite3
 
